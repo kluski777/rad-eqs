@@ -9,8 +9,7 @@ defFormt = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 # def sec2date(arg, formatS=defFormt):
 #     """ conversion from seconds to date (in string) """
-#     return datetime.fromtimestamp(int(arg)).strftime(formatS)
-#
+    # return datetime.fromtimestamp(int(arg)).strftime(formatS)
 
 def date2sec(arg, formatS=defFormt):
     """ convert date (in string) to seconds """
@@ -36,45 +35,29 @@ timeAug = []
 
 for row in auger:
     timeAug.append(int(row['time']))
+
 #### Koniec czytania pierre augera, liczenie korelacji teraz
 timeEQs = np.array(timeEQs)
 timeAug = np.array(timeAug)
 
-def calcCorr(shift, minutes):
-    global timeAug # jak tego uniknąć ten array jest ogromny?
-    timeAug = timeAug + shift # ta linijka jest do bani
+def calcCorr(shift, nDays):
     
-    binWidth = int(minutes*60) # szerokość bina w sekundach
-    minTime = np.maximum(np.min(timeAug), np.min(timeEQs))
-    maxTime = np.minimum(np.amax(timeAug), np.amax(timeEQs))
-    # maxTime += maxTime%binWidth
-    augWin = [] # liczba zarejstrowanych promieniowań w okienku czasowym
-    eqsWin = [] # Największa magnituda w danym okienku.
-    temp, oldTemp = 0, 0 # indeks dolny i górny
-    maxBinVal = minTime + binWidth
-    oldVal = 0
+    nDays *= 24*60*60
+    shift *= 24*60*60
+    augWin = np.zeros(len(timeEQs))
     
-    while minTime < maxTime:
-        temp += np.count_nonzero((minTime <= timeEQs) & (timeEQs < maxBinVal)) # chyba tą linijkę można poprawić żeby przyspieszyć skrypt
-        if temp != oldTemp:
-            eqsWin.append(np.amax(mag[oldTemp:temp]))
-            augWin.append(np.count_nonzero((minTime <= timeAug) & (timeAug < maxBinVal)) - oldVal)
-        oldVal = np.count_nonzero((minTime <= timeAug) & (timeAug < maxBinVal))
-        oldTemp = temp
-        maxBinVal += binWidth
-        minTime += binWidth
-        
-    return (np.corrcoef(augWin, eqsWin))[0,1] # np.corrcoef returns a matrix [0][1] points out to corr(A,B) not corr(A,A) nor corr(B,B)      
+    for i in range(len(timeEQs)): # dodawać pochodną liczby rayów.
+        augWin[i] = np.count_nonzero((timeAug > timeEQs[i] - nDays + shift) & (timeAug < timeEQs[i] + shift)) # zmiana liczby rayów
+    
+    return (np.corrcoef(augWin, mag))[0,1] # np.corrcoef returns a matrix [0][1] points out to corr(A,B) not corr(A,A) nor corr(B,B)      
 
-days_start, days_stop = 0, 1
-timeAug += days_start*24*60*60 # jak zaczynamy badań próbkę od dnia days_start to przesuwamy to
-step = 0.01 # w dniach
-length = int((days_stop-days_start)/step)
-binWidth = np.linspace(1,150, num=150) # w minutach
-coef = np.zeros([length,len(binWidth)])
-step = int(step*24*60*60) # zamiana jednostek na sekundy
+#### argumenty do funkcji i korelacje
+# shift = np.arange(0,10,0.2)
+nLastDays = np.arange(0.01, 0.02,0.001)
+coef = np.zeros(len(nLastDays))
+augWin = np.zeros([len(timeEQs), len(nLastDays)])
 
-for i in range(length):
-    for j in range(len(binWidth)):
-        print(f"Starting loop for: day = {i} day and binWidth = {binWidth[j]}")
-        coef[i] = calcCorr(step, binWidth[j])
+# for i in range(len(shift)):
+for j in range(len(nLastDays)):
+    print(f"Starting loop for: the day {nLastDays[j]}.")
+    coef[j] = calcCorr(0, nLastDays[j])
