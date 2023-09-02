@@ -10,19 +10,13 @@ path2EQ, path2CR, path2Sun = '/home/stud/praktyki/Data_analysis/EQs/wwEQ.csv', '
 path += [path2EQ, path2CR, path2Sun]
 EQDateFormat = "%Y-%m-%dT%H:%M:%S.%fZ"
 
-def sec2fraction(arg, formatS=EQDateFormat):
+def sec2fraction(timestamp):
     """ conversion from timestamp to year fraction """
-    yrFrac = 0.0
-    secInYear = 365*24*60*60
-    secIn4Years = 4*secInYear
-    while arg > secIn4Years:
-        arg -= secIn4Years
-        yrFrac += 4
-    while arg > secInYear:
-        arg -= secInYear
-        yrFrac += 1
-    yrFrac += arg/secInYear
-    return yrFrac+1970
+    secondsIn4Years = 4*365.25*24*60*60
+    secondsInYear = 365*24*60*60
+    rest = timestamp % secondsIn4Years
+    yearFraction = (timestamp - rest)/secondsInYear+ 1970
+    return yearFraction + rest/(365*24*60*60)
 
 """ conversion from seconds to date (in string) """        
 sec2date = lambda arg, formatS=EQDateFormat: datetime.fromtimestamp(int(arg)).strftime(formatS)
@@ -30,11 +24,8 @@ sec2date = lambda arg, formatS=EQDateFormat: datetime.fromtimestamp(int(arg)).st
 """ convert date (in string) to seconds """
 date2sec = lambda arg, formatS=EQDateFormat: int(datetime.strptime(arg, formatS).timestamp())
 
-def Pcdf(n, k):
-    if k <= n and k >= 0:
-        return factorial(n)/(factorial(n-k)*factorial(k)*2**n) + Pcdf(n, k-1)
-    else:
-        return 0
+""" Calculate probabilty N >= k """
+Pcdf = lambda n, k: factorial(n)/(factorial(n-k)*factorial(k)*2**n) + Pcdf(n, k-1) if k <= n and k >= 0 else 0
     
 class SunClass:
     timeRecorded = []
@@ -104,91 +95,61 @@ class CRClass:
         self.timeRecorded = np.array(self.timeRecorded)
         self.rateCorr = np.array(self.rateCorr)
         
-    def median(self, step, period, startTime):
-        toRet = []
-        temp = startTime
-        
-        while temp < startTime + period:
-            toRet.append(sum(self.rateCorr[((self.timeRecorded < temp + step) & (self.timeRecorded > temp))]))
-            temp += step
-        
-        return np.median(toRet)
-        
-def retWindow(var, time, timeWidth, timeStart, timeStop, operation = 'average'):
-    """ 
-    var - variable over which we'll calculate means / sums,
-    time - vector of time which specifies during what time certain var value was obtained,
-    timeWidth - width of 1 window
-    """
-    toRet = []
-    binTimes = []
-    curTime = timeStart
-    
-    while curTime < timeStop:
-        binTimes.append(curTime)
-        if operation == 'average':
-            toRet.append(np.mean(var[((time >= curTime) & (time < curTime + timeWidth))])) # jakim cude tu 0 może być?
-        elif operation == 'sum':
-            toRet.append(np.sum(var[(( time >= curTime) & (time < curTime + timeWidth))]))
-        else:
-            raise "Wrong operation argument sent to a function 'makeWindow'"
-        curTime += timeWidth
-
-    return np.array(toRet), np.array(binTimes)
-
-def makeWin42vars(EQ, CR, binWidth, startTime, stopTime): # CR and EQ are the classes
-    curTime = startTime
+def makeWin42vars(EQ, CR, binWidth, startTime, stopTime): 
+    binStarts = np.arange(startTime, stopTime, binWidth)
+    binStops = binStarts + binWidth
     toRetEQ, toRetCR = [], []
     
-    while curTime < stopTime:
-        toRetCR.append(np.mean(CR.rateCorr[((CR.timeRecorded > curTime) & (CR.timeRecorded < curTime + binWidth))]))
-        toRetEQ.append(np.sum(EQ.mag[((EQ.timeRecorded > curTime) & (EQ.timeRecorded < curTime + binWidth))]))
-        curTime += d
+    for i,j in zip(binStarts, binStops):
+        toRetCR.append(np.mean( CR.rateCorr[((CR.timeRecorded > i) & (CR.timeRecorded < j)) ] ))
+        toRetEQ.append(np.sum( EQ.mag[((EQ.timeRecorded > i) & (EQ.timeRecorded < j)) ] ))
         
-    toRetEQ = np.array(toRetEQ)
-    toRetCR = np.array(toRetCR)
+    toRetEQ, toRetCR = np.array(toRetEQ), np.array(toRetCR)
     indexes = ~np.isnan(toRetCR + toRetEQ)
     return toRetEQ[indexes], toRetCR[indexes]
-    
+
 SunData = SunClass(path2Sun)
 EQData = EQClass(path2EQ)
 CRData = CRClass(path2CR)
 
 
+# wykres 2 i 3
 P = 1675*24*60*60
-d = 5*24*60*60 # length of a window (I suppose)
-res = np.zeros(61)
+d = 5*24*60*60 # length of a window over which the sum / mean value will be calculated
+shift = np.arange(10,20,0.5)
+res = np.zeros(len(shift))
+czas = EQData.timeRecorded # co ciekawe mają inne adresy
 
-for i in range(-30,30):
-    print(f"Starting with day delay equal to {i}")
-    EQData.timeRecorded = EQData.timeRecorded + i*24*60*60 # shifting EQ data
+for i in range(len(res)):
+    EQData.timeRecorded = czas + shift[i]*24*60*60 # shifting EQ data
     
-    curTime     = date2sec('2014-04-02T22:07:12.00Z')  # CRData.timeRecorded[0]
-    periodTime  = date2sec('2014-04-02T22:07:12.00Z')
-    c, probability, times = [], [], []
-    stopTime = CRData.timeRecorded[-1] - P
+    binStarts   = np.arange(date2sec('2014-04-02T22:07:12.00Z'), EQData.timeRecorded[-1] - P, d)
+    binEnds     = binStarts + P
+    print(f"{i/len(res)*100}% completed\n", end = '\r', flush=True)
+    probability, times = [], []
+    stopTime    = CRData.timeRecorded[-1]
     
+    for j,l in zip(binStarts,binEnds):
+        sumMag, meanCR = makeWin42vars(EQData, CRData, d, j, l)
+        if np.median(sumMag) != 0 and np.median(meanCR) != 0:
+            c = np.where((sumMag/np.median(sumMag)-1)*(meanCR/np.median(meanCR)-1) > 0, 1, 0)
+            probability.append(Pcdf(len(c), sum(c)))
+            times.append(sec2fraction(l)) # tylko po to żeby wyświetlać lata na wykresie
     
-    while curTime < stopTime:
-        sumMag, meanCR = makeWin42vars(EQData, CRData, d, curTime, curTime + P)
-        # if np.median(sumMag) != 0 and np.median(meanCR) != 0: # zaburzać czas zaczyna lol
-        c = np.where((sumMag/np.median(sumMag)-1)*(meanCR/np.median(meanCR)-1) > 0, 1, 0)
-        probability.append(Pcdf(len(c), sum(c)))
-        times.append(sec2fraction(curTime))
-        curTime += d
+    res[i] = np.min(probability[:-75])
 
-    res[i+30] = np.min(probability)
 
-plt.title("Minimum probabilities with dependency to the number of days EQ data was shifted")
-plt.plot(np.linspace(-30, 30, num=len(res)), np.log10(res))
+plt.title("Minimum probabilities with dependency\nto the number of days EQ data was shifted")
+plt.plot(shift, np.log10(res))
 plt.xlabel("Number of days that EQ data was shifted")
-plt.ylabek("Minimum probability for given shift")
+plt.ylabel(r"$log_{10}(P_{cdf})$")
 
 
 # """ #Poniżej wykres 1 """
 # sunBinWidth = 30*24*60*60
 # magBinWidth = 5*24*60*60
 # crBinWidth = 5*24*60*60 # ew. 0.9915 dnia
+
 
 # spotsAvg, sunBinTimes = retWindow(SunData.spots, SunData.timeRecorded, sunBinWidth, 'average')
 # magSum, magBinTimes = retWindow(EQData.mag, EQData.timeRecorded, magBinWidth, 'sum')
