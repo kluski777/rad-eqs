@@ -6,17 +6,17 @@ from datetime import datetime
 from sys import path
 from math import factorial
 
+# potrzebne ścieżki poniżej
 path2EQ, path2CR, path2Sun = '/home/stud/praktyki/Data_analysis/EQs/query.csv', '/home/stud/praktyki/Data_analysis/pierre_auger/scalers.csv', '/home/stud/praktyki/Data_analysis/sunspots/SIDC.csv'
 path += [path2EQ, path2CR, path2Sun]
 EQDateFormat = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 def sec2fraction(timestamp):
     """ conversion from timestamp to year fraction """
-    secondsIn4Years = 4*365.25*24*60*60
-    secondsInYear = 365*24*60*60
-    rest = timestamp % secondsIn4Years
-    yearFraction = (timestamp - rest)/secondsInYear+ 1970
-    return yearFraction + rest/(365*24*60*60)
+    dt = datetime.fromtimestamp(timestamp) # convert timestamp to datetime object
+    year = dt.year # get the year
+    fraction = dt.timetuple().tm_yday/365 # get the dat of the year
+    return year + fraction
 
 """ conversion from seconds to date (in string) """        
 sec2date = lambda arg, formatS=EQDateFormat: datetime.fromtimestamp(int(arg)).strftime(formatS)
@@ -37,7 +37,7 @@ class SunClass:
         stopDate = date2sec(stopDate)
         
         for row in data:
-            if int(row['Year']) >= 1970:
+            if int(row['Year']) >= 1970: # warunek żeby ominąć błąd
                 timestamp = date2sec(row['Year']+'-'+row['Month']+'-'+row['Day']+'T12:00:00.00Z')
                 if timestamp >= startDate and timestamp < stopDate and row['sunspots'] != '-1':
                     self.timeRecorded.append(timestamp)
@@ -63,25 +63,16 @@ class EQClass:
                 self.mag.append(float(row['mag']))
                 self.magType.append(row['magType'])
         
-        self.timeRecorded = np.array(self.timeRecorded[::-1])
+        self.timeRecorded = np.array(self.timeRecorded[::-1]) # W pliku csv z USGS dane są od najnowszych dlatego odwracam
         self.mag = np.array(self.mag[::-1])
         self.magType = np.array(self.magType[::-1])
-        
-    def median(self, step, period, startTime):
-        toRet = []
-        temp = startTime
-        
-        while temp < startTime + period:
-            toRet.append(np.mean(self.mag[((self.timeRecorded < temp + step) & (self.timeRecorded > temp))]))
-            temp += step
-        
-        return np.median(toRet)
+
         
 class CRClass:
     timeRecorded = []
     rateCorr = []
     
-    def __init__(self, path, startDate = '1970-01-01T00:00:00.00Z', stopDate = '2023-08-30T15:17:00.00Z'):
+    def __init__(self, path, startDate='1970-01-01T00:00:00.00Z', stopDate='2023-08-30T15:17:00.00Z'):
         data = DictReader(open(path))
         startDate = date2sec(startDate)
         stopDate = date2sec(stopDate)
@@ -142,41 +133,51 @@ SunData = SunClass(path2Sun)
 EQData = EQClass(path2EQ)
 CRData = CRClass(path2CR)
 
-# dobra tu się zaczynamy korelacją pearsona zajmować, to bardzo proste będzie
+pass # trzeba zastosować coś w stylu pysparka żeby się szybko liczyło
 
-def PearsonCorr(daysBack):
-    meanRateCorrs = medianRateCorrs = magnitudes = []
+def PearsonCorr(daysBack, shift):
+    czasCR = CRData.timeRecorded + shift # przesuwanie czasu w którym rateCorr zostało zaobserwowane
+    meanRateCorrs, medianRateCorrs, magnitudes = [], [], []
 
     for i in range(len(EQData.timeRecorded)):
-        rateCorrs = CRData.rateCorr[((CRData.timeRecorded < EQData.timeRecorded[i]) & (CRData.timeRecorded > EQData.timeRecorded[i] - daysBack))]
+        rateCorrs = CRData.rateCorr[((czasCR < EQData.timeRecorded[i]) & (czasCR > EQData.timeRecorded[i] - daysBack))] # dane CR sprzed daysBack dni
         if len(rateCorrs) != 0:
-            magnitudes.append(EQData.mag[i])
+            magnitudes.append(EQData.mag[i]) # można poszukać dla różnych zależności typu pierwiastek, jakiś wielomian itd.
             meanRateCorrs.append(np.mean(rateCorrs))
             medianRateCorrs.append(np.median(rateCorrs))
-        
-    print(f"Długość danych: {len(magnitudes)}")
-    return np.corrcoef(meanRateCorrs, magnitudes)[0,1], np.corrcoef(medianRateCorrs, EQData.mag)[0,1]
 
 
-Range = np.arange(.1,3,.1)
-Range *= 24*60*60
-arrLength = len(Range)
-meanCorr, medianCorr = np.zeros(arrLength), np.zeros(arrLength)
+    return np.corrcoef(meanRateCorrs, magnitudes)[0,1], np.corrcoef(medianRateCorrs, magnitudes)[0,1]
 
+def corrDependency(shift, daysBack):
+    shift       *= 24*60*60
+    daysBack    *= 24*60*60
+    daysBackLength = len(daysBack)
+    shiftLength = len(shift)
+    meanCorr, medianCorr = np.zeros([daysBackLength, shiftLength]), np.zeros([daysBackLength, shiftLength])
 
-# for i in range(arrLength):
-#     meanCorr[i], medianCorr[i] = PearsonCorr(Range[i])
+    for i in range(daysBackLength):
+        for j in range(shiftLength):
+            print(f"{(i*shiftLength+j)/(shiftLength*daysBackLength)*100:.1f}% completed")
+            meanCorr[i,j], medianCorr[i,j] = PearsonCorr(daysBack[i], shift[j])
 
-meanRateCorrs, medianRateCorrs, magnitudes = [], [], []
+    daysBackLength /= 24*60*60
+    daysBack /= 24*60*60
 
+    return meanCorr, medianCorr
 
-for i in range(len(EQData.timeRecorded)):
-    rateCorrs = CRData.rateCorr[((CRData.timeRecorded < EQData.timeRecorded[i]) & (CRData.timeRecorded > EQData.timeRecorded[i] - 5*24*60*60))]
-    if len(rateCorrs) != 0:
-        magnitudes.append(EQData.mag[i])
-        meanRateCorrs.append(np.mean(rateCorrs))
-        medianRateCorrs.append(np.median(rateCorrs))
+shift       = np.arange(5.5, 7, 0.05)
+daysBack    = np.arange(0.025, 1, 0.025)
 
+meanCorr, medianCorr = corrDependency(shift, daysBack)
+
+# wykres korelacji
+plt.contourf(shift, daysBack, meanCorr, label='Mean value of rateCorr')
+plt.contourf(shift, daysBack, medianCorr, label='Median rateCorr')
+plt.xlabel('The number of days the magnitude\ndata was shifted forward')
+plt.ylabel('Number of days the CR data was gathered\nbefore the days of recorded magnitude')
+plt.legend(loc='upper right')
+plt.colorbar()
 
 
 
